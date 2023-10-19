@@ -1,0 +1,36 @@
+apiVersion: atlas.aibee.cn/v1beta1
+kind: MySQL
+metadata:
+  labels:
+    app.kubernetes.io/name: mysql
+    app.kubernetes.io/instance: mysql-sample
+    app.kubernetes.io/part-of: mysql-operator
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: mysql-operator
+  name: mysql-sample
+spec:
+  group:
+  - name: "test123"
+    namespace: infra
+    initconfig:
+      image: harbor.aibee.cn/platform/mysql:5.7.37
+      rootpassword: root_password
+      initdbs:
+      - mall 
+        common_push
+    single:
+      host:
+        host: bj-cpu065
+        dir: /mnt/124
+  - name: "test456"
+    namespace: infra
+    initconfig:
+      image: harbor.aibee.cn/platform/mysql:5.7.37
+      rootpassword: root_password
+      initdbs:
+      - mallx 
+      - common_pus22h
+    single:
+      host:
+        host: bj-cpu067
+        dir: /mnt/124

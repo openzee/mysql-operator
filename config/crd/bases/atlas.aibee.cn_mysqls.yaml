@@ -1,0 +1,135 @@
+
+---
+apiVersion: apiextensions.k8s.io/v1beta1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.6.2
+  creationTimestamp: null
+  name: mysqls.atlas.aibee.cn
+spec:
+  group: atlas.aibee.cn
+  names:
+    kind: MySQL
+    listKind: MySQLList
+    plural: mysqls
+    singular: mysql
+  scope: Namespaced
+  subresources:
+    status: {}
+  validation:
+    openAPIV3Schema:
+      description: MySQL is the Schema for the mysqls API
+      properties:
+        apiVersion:
+          description: 'APIVersion defines the versioned schema of this representation
+            of an object. Servers should convert recognized schemas to the latest
+            internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+          type: string
+        kind:
+          description: 'Kind is a string value representing the REST resource this
+            object represents. Servers may infer this from the endpoint the client
+            submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+          type: string
+        metadata:
+          type: object
+        spec:
+          description: MySQLSpec defines the desired state of MySQL
+          properties:
+            foo:
+              description: Foo is an example field of MySQL. Edit mysql_types.go to
+                remove/update
+              type: string
+            group:
+              items:
+                properties:
+                  backup:
+                    properties:
+                      dir:
+                        type: string
+                      host:
+                        type: string
+                    required:
+                    - dir
+                    - host
+                    type: object
+                  initconfig:
+                    properties:
+                      image:
+                        type: string
+                      initdbs:
+                        items:
+                          type: string
+                        type: array
+                      rootpassword:
+                        type: string
+                    required:
+                    - image
+                    type: object
+                  masterslave:
+                    properties:
+                      masterhost:
+                        properties:
+                          dir:
+                            type: string
+                          host:
+                            type: string
+                        required:
+                        - dir
+                        - host
+                        type: object
+                      slavehost:
+                        properties:
+                          dir:
+                            type: string
+                          host:
+                            type: string
+                        required:
+                        - dir
+                        - host
+                        type: object
+                    required:
+                    - masterhost
+                    - slavehost
+                    type: object
+                  name:
+                    type: string
+                  namespace:
+                    type: string
+                  single:
+                    properties:
+                      host:
+                        properties:
+                          dir:
+                            type: string
+                          host:
+                            type: string
+                        required:
+                        - dir
+                        - host
+                        type: object
+                    required:
+                    - host
+                    type: object
+                required:
+                - name
+                type: object
+              type: array
+          required:
+          - group
+          type: object
+        status:
+          description: MySQLStatus defines the observed state of MySQL
+          type: object
+      type: object
+  version: v1beta1
+  versions:
+  - name: v1beta1
+    served: true
+    storage: true
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: []
+  storedVersions: []
