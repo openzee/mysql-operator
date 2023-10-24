@@ -1,3 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cm-mysql-single-123
+  namespace: infra
+data:
+  mysqld.cnf: |-
+    [mysqld]
+    datadir=/var/lib/mysql
+    pid-file=/var/lib/mysql/mysqld.pid
+    socket=/var/lib/mysql/mysqld.sock
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cm-mysql-init-sql-123
+  namespace: infra
+data:
+  init.sql: |-
+    create database db1;
+    create database db2;
+---
 apiVersion: atlas.aibee.cn/v1beta1
 kind: MySQL
 metadata:
@@ -12,25 +34,28 @@ spec:
   group:
   - name: "test123"
     namespace: infra
-    initconfig:
-      image: harbor.aibee.cn/platform/mysql:5.7.37
-      rootpassword: root_password
-      initdbs:
-      - mall 
-        common_push
     single:
+      mysqld:
+        image: harbor.aibee.cn/platform/mysql:9.7.37
+        #image: harbor.aibee.cn/platform/mysql:5.7.37
+        rootpassword: root_password
+        mycnf_cm: cm-mysql-single-123
+        init_sql_cm: cm-mysql-init-sql-123
       host:
-        host: bj-cpu065
+        nodename: bj-cpu065
         dir: /mnt/124
+        request:
+          cpu: 1000m
+          memory: 2Gi
+        limit:
+          cpu: 4000m
+          memory: 8Gi
   - name: "test456"
     namespace: infra
-    initconfig:
-      image: harbor.aibee.cn/platform/mysql:5.7.37
-      rootpassword: root_password
-      initdbs:
-      - mallx 
-      - common_pus22h
     single:
+      mysqld:
+        image: harbor.aibee.cn/platform/mysql:5.7.37
+        rootpassword: root_password
       host:
-        host: bj-cpu067
+        nodename: bj-cpu067
         dir: /mnt/124

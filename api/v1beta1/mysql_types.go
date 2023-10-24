@@ -23,24 +23,35 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-type MySQLHostConfig struct {
-	Host string `json:"host"`
-	Dir  string `json:"dir"`
+type ResourceLimit struct {
+	Cpu    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
 }
 
-type MySQLSingle struct {
-	Host MySQLHostConfig `json:"host"`
+type MySQLHostNode struct {
+	//MySQL调度到该节点
+	NodeName string         `json:"nodename"`
+	Dir      string         `json:"dir"`
+	Request  *ResourceLimit `json:"request,omitempty"`
+	Limit    *ResourceLimit `json:"limit,omitempty"`
+}
+
+// 表示一个msyqld服务的配置
+type MySQLd struct {
+	Image                string `json:"image"`
+	RootPassword         string `json:"rootpassword,omitempty"`
+	MycnfConfigMapName   string `json:"mycnf_cm,omitempty"`
+	InitSQLConfigMapName string `json:"init_sql_cm,omitempty"`
+}
+
+type MySQLService struct {
+	Host   MySQLHostNode `json:"host"`
+	Mysqld MySQLd        `json:"mysqld"`
 }
 
 type MySQLMasterSlave struct {
-	MasterHost MySQLHostConfig `json:"masterhost"`
-	SlaveHost  MySQLHostConfig `json:"slavehost"`
-}
-
-type MySQLInitConfig struct {
-	Image        string   `json:"image"`
-	RootPassword string   `json:"rootpassword,omitempty"`
-	InitDataBase []string `json:"initdbs,omitempty"`
+	Master MySQLService `json:"master"`
+	Slave  MySQLService `json:"slave"`
 }
 
 type BackupPolicy struct {
@@ -51,9 +62,8 @@ type BackupPolicy struct {
 type MySQLGroup struct {
 	Name        string            `json:"name"`
 	Namespace   string            `json:"namespace,omitempty"`
-	InitConfig  *MySQLInitConfig  `json:"initconfig,omitempty"`
 	Backup      *BackupPolicy     `json:"backup,omitempty"`
-	Single      *MySQLSingle      `json:"single,omitempty"`
+	Single      *MySQLService     `json:"single,omitempty"`
 	MasterSlave *MySQLMasterSlave `json:"masterslave,omitempty"`
 }
 

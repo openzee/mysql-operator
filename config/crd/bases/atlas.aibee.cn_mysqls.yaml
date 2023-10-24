@@ -53,44 +53,101 @@ spec:
                     - dir
                     - host
                     type: object
-                  initconfig:
-                    properties:
-                      image:
-                        type: string
-                      initdbs:
-                        items:
-                          type: string
-                        type: array
-                      rootpassword:
-                        type: string
-                    required:
-                    - image
-                    type: object
                   masterslave:
                     properties:
-                      masterhost:
+                      master:
                         properties:
-                          dir:
-                            type: string
                           host:
-                            type: string
+                            properties:
+                              dir:
+                                type: string
+                              limit:
+                                properties:
+                                  cpu:
+                                    type: string
+                                  memory:
+                                    type: string
+                                type: object
+                              nodename:
+                                description: MySQL调度到该节点
+                                type: string
+                              request:
+                                properties:
+                                  cpu:
+                                    type: string
+                                  memory:
+                                    type: string
+                                type: object
+                            required:
+                            - dir
+                            - nodename
+                            type: object
+                          mysqld:
+                            description: 表示一个msyqld服务的配置
+                            properties:
+                              image:
+                                type: string
+                              init_sql_cm:
+                                type: string
+                              mycnf_cm:
+                                type: string
+                              rootpassword:
+                                type: string
+                            required:
+                            - image
+                            type: object
                         required:
-                        - dir
                         - host
+                        - mysqld
                         type: object
-                      slavehost:
+                      slave:
                         properties:
-                          dir:
-                            type: string
                           host:
-                            type: string
+                            properties:
+                              dir:
+                                type: string
+                              limit:
+                                properties:
+                                  cpu:
+                                    type: string
+                                  memory:
+                                    type: string
+                                type: object
+                              nodename:
+                                description: MySQL调度到该节点
+                                type: string
+                              request:
+                                properties:
+                                  cpu:
+                                    type: string
+                                  memory:
+                                    type: string
+                                type: object
+                            required:
+                            - dir
+                            - nodename
+                            type: object
+                          mysqld:
+                            description: 表示一个msyqld服务的配置
+                            properties:
+                              image:
+                                type: string
+                              init_sql_cm:
+                                type: string
+                              mycnf_cm:
+                                type: string
+                              rootpassword:
+                                type: string
+                            required:
+                            - image
+                            type: object
                         required:
-                        - dir
                         - host
+                        - mysqld
                         type: object
                     required:
-                    - masterhost
-                    - slavehost
+                    - master
+                    - slave
                     type: object
                   name:
                     type: string
@@ -102,14 +159,44 @@ spec:
                         properties:
                           dir:
                             type: string
-                          host:
+                          limit:
+                            properties:
+                              cpu:
+                                type: string
+                              memory:
+                                type: string
+                            type: object
+                          nodename:
+                            description: MySQL调度到该节点
                             type: string
+                          request:
+                            properties:
+                              cpu:
+                                type: string
+                              memory:
+                                type: string
+                            type: object
                         required:
                         - dir
-                        - host
+                        - nodename
+                        type: object
+                      mysqld:
+                        description: 表示一个msyqld服务的配置
+                        properties:
+                          image:
+                            type: string
+                          init_sql_cm:
+                            type: string
+                          mycnf_cm:
+                            type: string
+                          rootpassword:
+                            type: string
+                        required:
+                        - image
                         type: object
                     required:
                     - host
+                    - mysqld
                     type: object
                 required:
                 - name
