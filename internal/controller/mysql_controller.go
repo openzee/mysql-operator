@@ -33,6 +33,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	atlasaibeecnv1beta1 "github.com/openzee/mysql-operator/api/v1beta1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -58,34 +61,130 @@ type MySQLReconciler struct {
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.16.2/pkg/reconcile
+
+/*
+**派生的事件来源有两个
+** 1、EnqueueRequestForObject  controller-runtime/pkg/handler/enqueue.go
+**    1) Create
+**    2) Update
+**	  3) Delete
+**
+**	  事件派生核心代码为：
+**	  q.Add(reconcile.Request{NamespacedName: types.NamespacedName{
+**		Name:      evt.Object.GetName(),
+**		Namespace: evt.Object.GetNamespace(),
+**	  }})
+**
+**	  触发条件：
+**	  1、MySQL对象新建：触发 Add
+**	  2、MySQL对象删除：触发 Delete
+**	  3、MySQL对象更新：触发Update
+**    4、operator内通过r.Update更新：也会触发Update事件
+**	  4、Operator启动：触发Add
+**
+** 2、产生的事件,根据Reconcile处理结果或重新入队，再次触发Reconcile的调用
+**    1) 返回的err不为空：       ctrl.Request将重新进入延迟队列，后续触发
+**	  2) result.Requeue == true: ctrl.Request将重新进入延迟队列，后续触发
+**	  3) result.RequeueAfter>0：请求一段事件后，重新入队
+**
+**   crd/MySQL 对象删除逻辑：
+** 	 如果finalizers字段不为空：
+		1) crd/MySQL的 DeletionTimestamp 字段被设置为非空
+		2) update事件触发
+		3) Reconcile执行清理工作
+		4) Reconcile更新crd/MySQL将finalizers字段清理
+		5) delete事件触发
+**当返回 ctrl.Result{}, nil，即表示该事件处理完毕，在新的事件到来前，Reconcile是不会被调用的.
+*/
+
+//自定义对象MySQL新建时，
+
 func (r *MySQLReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+
+	_ = log.FromContext(ctx)
 	instance := &atlasaibeecnv1beta1.MySQL{}
+	// name of our custom finalizer
+	myFinalizerName := "mysql.atlas.aibee.cn/finalizer"
 
 	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
-		log.Error(err, "GET MySQL fails")
-		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err //该事件会重新入队，并再次延迟触发
 	}
+
+	defer func() {
+		r.resourceVersion = instance.ResourceVersion
+	}()
+
+	//监测到MySQL对象被删除
+	if !instance.ObjectMeta.DeletionTimestamp.IsZero() {
+		// The object is being deleted
+
+		if err := r.deleteExternalResources(ctx, instance); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		if !controllerutil.ContainsFinalizer(instance, myFinalizerName) {
+			return ctrl.Result{}, nil
+		}
+
+		controllerutil.RemoveFinalizer(instance, myFinalizerName)
+		return ctrl.Result{}, r.Update(ctx, instance)
+	}
+
+	//先添加finalizer
+	if !controllerutil.ContainsFinalizer(instance, myFinalizerName) {
+		controllerutil.AddFinalizer(instance, myFinalizerName)
+		fmt.Println("add finalizer and update")
+		return ctrl.Result{}, r.Update(ctx, instance)
+	}
+
+	//处理更新事件
+	//但是在operator没有running期间，crd/MySQL对象的变更应该抓取不到
+	if r.resourceVersion != "" && r.resourceVersion != instance.ResourceVersion {
+		r.updateExternalResources(ctx, instance)
+		return ctrl.Result{}, nil
+	}
+
+	//初始化安装或是定时检查服务状态是否存在
+	r.installIfNotExistsExternalResources(ctx, instance)
+
+	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+}
+
+func (r *MySQLReconciler) updateExternalResources(ctx context.Context, instance *atlasaibeecnv1beta1.MySQL) error {
+	return nil
+}
+
+func (r *MySQLReconciler) installIfNotExistsExternalResources(ctx context.Context, instance *atlasaibeecnv1beta1.MySQL) error {
 
 	for _, g := range instance.Spec.Group {
 		if g.Namespace == "" {
 			g.Namespace = instance.Namespace
 		}
 
-		r.ReconcileGroup(ctx, &g, r.resourceVersion != instance.ResourceVersion)
+		r.InstallIfNotExistsDeployCase(ctx, &g)
 	}
-
-	r.resourceVersion = instance.ResourceVersion
-
-	return ctrl.Result{RequeueAfter: time.Second * 5}, nil
-}
-
-func (r *MySQLReconciler) ReconcileMasterSlave(ctx context.Context, g *atlasaibeecnv1beta1.MySQLGroup) error {
 
 	return nil
 }
 
-func (r *MySQLReconciler) ReconcileBackup(ctx context.Context, g *atlasaibeecnv1beta1.MySQLGroup) error {
+func (r *MySQLReconciler) deleteExternalResources(ctx context.Context, instance *atlasaibeecnv1beta1.MySQL) error {
+	//
+	// delete any external resources associated with the cronJob
+	//
+	// Ensure that delete implementation is idempotent and safe to invoke
+	// multiple times for same object.
+	return nil
+}
+
+func (r *MySQLReconciler) ReconcileMasterSlave(ctx context.Context, g *atlasaibeecnv1beta1.DeployCase) error {
+
+	return nil
+}
+
+func (r *MySQLReconciler) ReconcileBackup(ctx context.Context, g *atlasaibeecnv1beta1.DeployCase) error {
 
 	return nil
 }
@@ -105,7 +204,66 @@ func (r *MySQLReconciler) IsExistsConfigMap(ctx context.Context, name, namespace
 	return true, nil
 }
 
-func (r *MySQLReconciler) NewPod(ctx context.Context, podName, namespace string, mysql_service *atlasaibeecnv1beta1.MySQLService) *corev1.Pod {
+func (r *MySQLReconciler) UpdateService(ctx context.Context, svc_name, svc_ns, selectorAppValue string) error {
+	found := &corev1.Service{}
+
+	if err := r.Get(ctx, types.NamespacedName{Name: svc_name, Namespace: svc_ns}, found); err != nil {
+		return err
+	}
+
+	if found.Spec.Selector["app"] == selectorAppValue {
+		return nil
+	}
+
+	found.Spec.Selector["app"] = selectorAppValue
+
+	return r.Update(ctx, found)
+}
+
+func (r *MySQLReconciler) CreateServiceIfNotExists(ctx context.Context, svc_name, svc_ns, selectorAppValue string) error {
+
+	found := &corev1.Service{}
+
+	if err := r.Get(ctx, types.NamespacedName{Name: svc_name, Namespace: svc_ns}, found); err != nil {
+
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+
+		service := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      svc_name,
+				Namespace: svc_ns,
+			},
+			Spec: corev1.ServiceSpec{
+				Ports: []corev1.ServicePort{corev1.ServicePort{
+					Name:       "mysql",
+					Port:       3306,
+					TargetPort: intstr.FromInt(3306),
+				}},
+				Selector: map[string]string{"app": selectorAppValue},
+			},
+		}
+
+		return r.Create(ctx, service)
+	}
+
+	return nil
+}
+
+func (r *MySQLReconciler) CreateMySQLPodIfNotExists(ctx context.Context, podName, namespace string, mysql_service *atlasaibeecnv1beta1.MySQLService) error {
+
+	found := &corev1.Pod{}
+
+	err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: namespace}, found)
+
+	if err == nil {
+		return nil
+	}
+
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
 
 	pathDir := corev1.HostPathDirectoryOrCreate
 
@@ -181,10 +339,11 @@ func (r *MySQLReconciler) NewPod(ctx context.Context, podName, namespace string,
 		})
 	}
 
-	return &corev1.Pod{
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
 			Namespace: namespace,
+			Labels:    map[string]string{"app": podName},
 		},
 		Spec: corev1.PodSpec{
 			Volumes:  volumes,
@@ -209,52 +368,79 @@ func (r *MySQLReconciler) NewPod(ctx context.Context, podName, namespace string,
 			}},
 		},
 	}
+
+	return r.Create(ctx, pod)
 }
 
-func (r *MySQLReconciler) ReconcileSingle(ctx context.Context, g *atlasaibeecnv1beta1.MySQLGroup, update bool) error {
-	log := log.FromContext(ctx)
-	podName := fmt.Sprintf("mysql-single-%s", g.Name)
-	found := &corev1.Pod{}
+func (r *MySQLReconciler) InstallIfNotExistsSingle(ctx context.Context, g *atlasaibeecnv1beta1.DeployCase) error {
+	_ = log.FromContext(ctx)
 
-	if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: g.Namespace}, found); err != nil {
+	//podName := fmt.Sprintf("mysql-single-%s", g.Name)
 
-		if !apierrors.IsNotFound(err) {
-			log.Error(err, "get pod fails")
-			return err
-		}
+	//found := &corev1.Pod{}
 
-		if err := r.Create(ctx, r.NewPod(ctx, podName, g.Namespace, g.Single)); err != nil {
-			log.Error(err, "create pod fails")
-			return err
-		}
+	//if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: g.Namespace}, found); err != nil {
 
-		log.Info("create pod success")
-		return nil
-	}
+	//	if !apierrors.IsNotFound(err) {
+	//		log.Error(err, "get pod fails")
+	//		return err
+	//	}
 
-	if update {
+	//	if err := r.Create(ctx, r.NewPod(ctx, podName, g.Namespace, g.Single)); err != nil {
+	//		log.Error(err, "create pod fails")
+	//		return err
+	//	}
 
-		found.Spec.Containers[0].Image = g.Single.Mysqld.Image
+	//	log.Info("create pod success")
+	//	return nil
+	//}
 
-		if err := r.Update(ctx, found); err != nil {
-			fmt.Println("update fails", err)
-			return err
-		}
+	//if update {
 
-		fmt.Println("update success")
-		return nil
-	}
+	//	if err := r.UpdateService(ctx, servcieName, g.Namespace, podName); err != nil {
+	//		log.Error(err, "update service fails")
+	//	}
 
-	fmt.Println("none")
+	//	flags := false
+
+	//	if found.Spec.Containers[0].Image != g.Single.Mysqld.Image {
+	//		found.Spec.Containers[0].Image = g.Single.Mysqld.Image
+	//		flags = true
+	//	}
+
+	//	if flags {
+	//		if err := r.Update(ctx, found); err != nil {
+	//			log.Error(err, "update fails")
+	//			return err
+	//		}
+	//		log.Info("update success")
+	//	} else {
+	//		log.Info("not support update")
+	//	}
+
+	//	return nil
+	//}
+
 	return nil
 }
 
-func (r *MySQLReconciler) ReconcileGroup(ctx context.Context, g *atlasaibeecnv1beta1.MySQLGroup, update bool) error {
+// 单实例模式和主从模式仅选一个，优先支持单实例模式
+func (r *MySQLReconciler) InstallIfNotExistsDeployCase(ctx context.Context, g *atlasaibeecnv1beta1.DeployCase) error {
 
-	//单实例模式和主从模式仅选一个，优先支持单实例模式
+	log := log.FromContext(ctx)
+
+	if g.ServiceName == "" {
+		g.ServiceName = fmt.Sprintf("svc-mysql-%s", g.Name)
+	}
+
+	selectorAppValue := fmt.Sprintf("master-node-%s", g.Name)
+
+	if err := r.CreateServiceIfNotExists(ctx, g.ServiceName, g.Namespace, selectorAppValue); err != nil {
+		log.Error(err, "create service fails")
+	}
 
 	if g.Single != nil {
-		return r.ReconcileSingle(ctx, g, update)
+		return r.InstallIfNotExistsSingle(ctx, g)
 	}
 
 	if g.MasterSlave != nil {

@@ -20,6 +20,16 @@ data:
     create database db1;
     create database db2;
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cm-mysql-init-sql-test
+  namespace: infra
+data:
+  init.sql: |-
+    create database db1;
+    create database db2;
+---
 apiVersion: atlas.aibee.cn/v1beta1
 kind: MySQL
 metadata:
@@ -36,8 +46,7 @@ spec:
     namespace: infra
     single:
       mysqld:
-        image: harbor.aibee.cn/platform/mysql:9.7.37
-        #image: harbor.aibee.cn/platform/mysql:5.7.37
+        image: harbor.aibee.cn/platform/mysql:5.7.37
         rootpassword: root_password
         mycnf_cm: cm-mysql-single-123
         init_sql_cm: cm-mysql-init-sql-123
@@ -52,6 +61,7 @@ spec:
           memory: 8Gi
   - name: "test456"
     namespace: infra
+    service_name: "svc-kk"
     single:
       mysqld:
         image: harbor.aibee.cn/platform/mysql:5.7.37
