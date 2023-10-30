@@ -22,29 +22,22 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	//appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
-
-	"k8s.io/apimachinery/pkg/api/resource"
 
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-
-	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	atlasaibeecnv1beta1 "github.com/openzee/mysql-operator/api/v1beta1"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // MySQLReconciler reconciles a MySQL object
 type MySQLReconciler struct {
 	client.Client
-	Scheme          *runtime.Scheme
+	MyScheme        *runtime.Scheme
 	resourceVersion string
 }
 
@@ -121,7 +114,7 @@ func (r *MySQLReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if !instance.ObjectMeta.DeletionTimestamp.IsZero() {
 		// The object is being deleted
 
-		if err := r.deleteExternalResources(ctx, instance); err != nil {
+		if err := instance.Delete(r, ctx); err != nil {
 			return ctrl.Result{}, err
 		}
 
@@ -143,311 +136,14 @@ func (r *MySQLReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	//处理更新事件
 	//但是在operator没有running期间，crd/MySQL对象的变更应该抓取不到
 	if r.resourceVersion != "" && r.resourceVersion != instance.ResourceVersion {
-		r.updateExternalResources(ctx, instance)
+		instance.Update(r, ctx)
 		return ctrl.Result{}, nil
 	}
 
 	//初始化安装或是定时检查服务状态是否存在
-	r.installIfNotExistsExternalResources(ctx, instance)
+	instance.Install(r, ctx)
 
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-}
-
-func (r *MySQLReconciler) updateExternalResources(ctx context.Context, instance *atlasaibeecnv1beta1.MySQL) error {
-	return nil
-}
-
-func (r *MySQLReconciler) installIfNotExistsExternalResources(ctx context.Context, instance *atlasaibeecnv1beta1.MySQL) error {
-
-	for _, g := range instance.Spec.Group {
-		if g.Namespace == "" {
-			g.Namespace = instance.Namespace
-		}
-
-		r.InstallIfNotExistsDeployCase(ctx, &g)
-	}
-
-	return nil
-}
-
-func (r *MySQLReconciler) deleteExternalResources(ctx context.Context, instance *atlasaibeecnv1beta1.MySQL) error {
-	//
-	// delete any external resources associated with the cronJob
-	//
-	// Ensure that delete implementation is idempotent and safe to invoke
-	// multiple times for same object.
-	return nil
-}
-
-func (r *MySQLReconciler) ReconcileMasterSlave(ctx context.Context, g *atlasaibeecnv1beta1.DeployCase) error {
-
-	return nil
-}
-
-func (r *MySQLReconciler) ReconcileBackup(ctx context.Context, g *atlasaibeecnv1beta1.DeployCase) error {
-
-	return nil
-}
-
-func (r *MySQLReconciler) IsExistsConfigMap(ctx context.Context, name, namespace string) (bool, error) {
-
-	found := &corev1.ConfigMap{}
-	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, found); err != nil {
-
-		if apierrors.IsNotFound(err) {
-			return false, nil
-		}
-
-		return false, err
-	}
-
-	return true, nil
-}
-
-func (r *MySQLReconciler) UpdateService(ctx context.Context, svc_name, svc_ns, selectorAppValue string) error {
-	found := &corev1.Service{}
-
-	if err := r.Get(ctx, types.NamespacedName{Name: svc_name, Namespace: svc_ns}, found); err != nil {
-		return err
-	}
-
-	if found.Spec.Selector["app"] == selectorAppValue {
-		return nil
-	}
-
-	found.Spec.Selector["app"] = selectorAppValue
-
-	return r.Update(ctx, found)
-}
-
-func (r *MySQLReconciler) CreateServiceIfNotExists(ctx context.Context, svc_name, svc_ns, selectorAppValue string) error {
-
-	found := &corev1.Service{}
-
-	if err := r.Get(ctx, types.NamespacedName{Name: svc_name, Namespace: svc_ns}, found); err != nil {
-
-		if !apierrors.IsNotFound(err) {
-			return err
-		}
-
-		service := &corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      svc_name,
-				Namespace: svc_ns,
-			},
-			Spec: corev1.ServiceSpec{
-				Ports: []corev1.ServicePort{corev1.ServicePort{
-					Name:       "mysql",
-					Port:       3306,
-					TargetPort: intstr.FromInt(3306),
-				}},
-				Selector: map[string]string{"app": selectorAppValue},
-			},
-		}
-
-		return r.Create(ctx, service)
-	}
-
-	return nil
-}
-
-func (r *MySQLReconciler) CreateMySQLPodIfNotExists(ctx context.Context, podName, namespace string, mysql_service *atlasaibeecnv1beta1.MySQLService) error {
-
-	found := &corev1.Pod{}
-
-	err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: namespace}, found)
-
-	if err == nil {
-		return nil
-	}
-
-	if !apierrors.IsNotFound(err) {
-		return err
-	}
-
-	pathDir := corev1.HostPathDirectoryOrCreate
-
-	//默认的cpu和memory限制
-	defaultResource := corev1.ResourceList{
-		corev1.ResourceCPU:    resource.MustParse("1000m"),
-		corev1.ResourceMemory: resource.MustParse("2G"),
-	}
-
-	resourceRequest := defaultResource
-	if mysql_service.Host.Request != nil {
-		resourceRequest = corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse(mysql_service.Host.Request.Cpu),
-			corev1.ResourceMemory: resource.MustParse(mysql_service.Host.Request.Memory)}
-	}
-
-	resourceLimit := defaultResource
-	if mysql_service.Host.Limit != nil {
-		resourceLimit = corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse(mysql_service.Host.Limit.Cpu),
-			corev1.ResourceMemory: resource.MustParse(mysql_service.Host.Limit.Memory)}
-	}
-
-	volumes := []corev1.Volume{
-		corev1.Volume{
-			Name: "data",
-			VolumeSource: corev1.VolumeSource{
-				HostPath: &corev1.HostPathVolumeSource{
-					Path: mysql_service.Host.Dir,
-					Type: &pathDir},
-			}},
-	}
-
-	volumeMounts := []corev1.VolumeMount{
-		corev1.VolumeMount{
-			Name:      "data",
-			MountPath: "/var/lib/mysql",
-			SubPath:   "mysql",
-		},
-	}
-
-	if ok, _ := r.IsExistsConfigMap(ctx, mysql_service.Mysqld.MycnfConfigMapName, namespace); ok == true {
-		volumes = append(volumes, corev1.Volume{
-			Name: "mycnf",
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: mysql_service.Mysqld.MycnfConfigMapName,
-					}},
-			}})
-
-		volumeMounts = append(volumeMounts, corev1.VolumeMount{
-			Name:      "mycnf",
-			MountPath: "/etc/mysql/mysql.conf.d/mysqld.cnf",
-			SubPath:   "mysqld.cnf",
-		})
-	}
-
-	if ok, _ := r.IsExistsConfigMap(ctx, mysql_service.Mysqld.InitSQLConfigMapName, namespace); ok == true {
-		volumes = append(volumes, corev1.Volume{
-			Name: "initsql",
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: mysql_service.Mysqld.InitSQLConfigMapName,
-					}},
-			}})
-
-		volumeMounts = append(volumeMounts, corev1.VolumeMount{
-			Name:      "initsql",
-			MountPath: "docker-entrypoint-initdb.d/init.sql",
-			SubPath:   "init.sql",
-		})
-	}
-
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      podName,
-			Namespace: namespace,
-			Labels:    map[string]string{"app": podName},
-		},
-		Spec: corev1.PodSpec{
-			Volumes:  volumes,
-			NodeName: mysql_service.Host.NodeName,
-			Containers: []corev1.Container{corev1.Container{
-				Name: "mysql",
-				Resources: corev1.ResourceRequirements{
-					Limits:   resourceLimit,
-					Requests: resourceRequest,
-				},
-				Image: mysql_service.Mysqld.Image,
-				Ports: []corev1.ContainerPort{
-					corev1.ContainerPort{
-						Name:          "mysql",
-						ContainerPort: 3306,
-					}},
-				VolumeMounts: volumeMounts,
-				Env: []corev1.EnvVar{corev1.EnvVar{
-					Name:  "MYSQL_ROOT_PASSWORD",
-					Value: mysql_service.Mysqld.RootPassword,
-				}},
-			}},
-		},
-	}
-
-	return r.Create(ctx, pod)
-}
-
-func (r *MySQLReconciler) InstallIfNotExistsSingle(ctx context.Context, g *atlasaibeecnv1beta1.DeployCase) error {
-	_ = log.FromContext(ctx)
-
-	//podName := fmt.Sprintf("mysql-single-%s", g.Name)
-
-	//found := &corev1.Pod{}
-
-	//if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: g.Namespace}, found); err != nil {
-
-	//	if !apierrors.IsNotFound(err) {
-	//		log.Error(err, "get pod fails")
-	//		return err
-	//	}
-
-	//	if err := r.Create(ctx, r.NewPod(ctx, podName, g.Namespace, g.Single)); err != nil {
-	//		log.Error(err, "create pod fails")
-	//		return err
-	//	}
-
-	//	log.Info("create pod success")
-	//	return nil
-	//}
-
-	//if update {
-
-	//	if err := r.UpdateService(ctx, servcieName, g.Namespace, podName); err != nil {
-	//		log.Error(err, "update service fails")
-	//	}
-
-	//	flags := false
-
-	//	if found.Spec.Containers[0].Image != g.Single.Mysqld.Image {
-	//		found.Spec.Containers[0].Image = g.Single.Mysqld.Image
-	//		flags = true
-	//	}
-
-	//	if flags {
-	//		if err := r.Update(ctx, found); err != nil {
-	//			log.Error(err, "update fails")
-	//			return err
-	//		}
-	//		log.Info("update success")
-	//	} else {
-	//		log.Info("not support update")
-	//	}
-
-	//	return nil
-	//}
-
-	return nil
-}
-
-// 单实例模式和主从模式仅选一个，优先支持单实例模式
-func (r *MySQLReconciler) InstallIfNotExistsDeployCase(ctx context.Context, g *atlasaibeecnv1beta1.DeployCase) error {
-
-	log := log.FromContext(ctx)
-
-	if g.ServiceName == "" {
-		g.ServiceName = fmt.Sprintf("svc-mysql-%s", g.Name)
-	}
-
-	selectorAppValue := fmt.Sprintf("master-node-%s", g.Name)
-
-	if err := r.CreateServiceIfNotExists(ctx, g.ServiceName, g.Namespace, selectorAppValue); err != nil {
-		log.Error(err, "create service fails")
-	}
-
-	if g.Single != nil {
-		return r.InstallIfNotExistsSingle(ctx, g)
-	}
-
-	if g.MasterSlave != nil {
-		return r.ReconcileMasterSlave(ctx, g)
-	}
-
-	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

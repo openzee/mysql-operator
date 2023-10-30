@@ -22,6 +22,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -71,18 +72,12 @@ type MySQLService struct {
 	Mysqld MySQLd        `json:"mysqld"`
 }
 
-func (obj *MySQLService) InstallIfNotExists(ctx context.Context, r client.Client, podName, namespace string) error {
+func (obj *MySQLService) Install(r client.Client, ctx context.Context, podName, namespace string) error {
 
 	found := &corev1.Pod{}
 
-	err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: namespace}, found)
-
-	if err == nil {
+	if IsExistResource(r, ctx, types.NamespacedName{Name: podName, Namespace: namespace}, found) {
 		return nil
-	}
-
-	if !apierrors.IsNotFound(err) {
-		return err
 	}
 
 	pathDir := corev1.HostPathDirectoryOrCreate
@@ -211,12 +206,49 @@ type DeployCase struct {
 	MasterSlave *MySQLMasterSlave `json:"masterslave,omitempty"`
 }
 
+func (obj *DeployCase) Install(r client.Client, ctx context.Context, name, namespace string) error {
+
+	if err := obj.InstallService(r, ctx); err != nil {
+		return err
+	}
+
+	if obj.Single != nil {
+		return obj.Single.Install(r, ctx, fmt.Sprintf("mysql-single-%s", name), namespace)
+	}
+
+	return nil
+}
+
+func (obj *DeployCase) Update(r client.Client, ctx context.Context, name, namespace string) error {
+	return nil
+}
+
+func (obj *DeployCase) Delete(r client.Client, ctx context.Context, name, namespace string) error {
+	return nil
+}
+
 func (obj *DeployCase) serviceSelectorValue() string {
 
 	return fmt.Sprintf("master-node-%s", obj.Name)
 }
 
-func (obj *DeployCase) InstallServiceIfNotExists(ctx context.Context, r client.Client) error {
+func (obj *DeployCase) UpdateService(r client.Client, ctx context.Context, svc_name, svc_ns, selectorAppValue string) error {
+	found := &corev1.Service{}
+
+	if err := r.Get(ctx, types.NamespacedName{Name: svc_name, Namespace: svc_ns}, found); err != nil {
+		return err
+	}
+
+	if found.Spec.Selector["app"] == selectorAppValue {
+		return nil
+	}
+
+	found.Spec.Selector["app"] = selectorAppValue
+
+	return r.Update(ctx, found)
+}
+
+func (obj *DeployCase) InstallService(r client.Client, ctx context.Context) error {
 
 	found := &corev1.Service{}
 
@@ -224,13 +256,8 @@ func (obj *DeployCase) InstallServiceIfNotExists(ctx context.Context, r client.C
 		obj.ServiceName = fmt.Sprintf("svc-mysql-%s", obj.Name)
 	}
 
-	err := r.Get(ctx, types.NamespacedName{Name: obj.ServiceName, Namespace: obj.Namespace}, found)
-	if err == nil {
+	if IsExistResource(r, ctx, types.NamespacedName{Name: obj.ServiceName, Namespace: obj.Namespace}, found) {
 		return nil
-	}
-
-	if !apierrors.IsNotFound(err) {
-		return err
 	}
 
 	service := &corev1.Service{
@@ -249,7 +276,6 @@ func (obj *DeployCase) InstallServiceIfNotExists(ctx context.Context, r client.C
 	}
 
 	return r.Create(ctx, service)
-
 }
 
 // MySQLSpec defines the desired state of MySQL
@@ -263,6 +289,44 @@ type MySQLSpec struct {
 	Foo string `json:"foo,omitempty"`
 }
 
+func (obj *MySQLSpec) Install(r client.Client, ctx context.Context, name, namespace string) error {
+
+	for _, item := range obj.Group {
+		if item.Namespace == "" {
+			item.Namespace = namespace
+		}
+
+		item.Install(r, ctx, name, namespace)
+	}
+
+	return nil
+}
+
+func (obj *MySQLSpec) Update(r client.Client, ctx context.Context, name, namespace string) error {
+	for _, item := range obj.Group {
+		if item.Namespace == "" {
+			item.Namespace = namespace
+		}
+
+		item.Update(r, ctx, name, namespace)
+	}
+
+	return nil
+}
+
+func (obj *MySQLSpec) Delete(r client.Client, ctx context.Context, name, namespace string) error {
+	for _, item := range obj.Group {
+		if item.Namespace == "" {
+			item.Namespace = namespace
+		}
+
+		item.Delete(r, ctx, name, namespace)
+	}
+
+	return nil
+}
+
+// +kubebuilder:object:root=true
 // MySQLStatus defines the observed state of MySQL
 type MySQLStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
@@ -279,6 +343,18 @@ type MySQL struct {
 
 	Spec   MySQLSpec   `json:"spec,omitempty"`
 	Status MySQLStatus `json:"status,omitempty"`
+}
+
+func (obj *MySQL) Install(r client.Client, ctx context.Context) error {
+	return obj.Spec.Install(r, ctx, obj.Name, obj.Namespace)
+}
+
+func (obj *MySQL) Update(r client.Client, ctx context.Context) error {
+	return obj.Spec.Update(r, ctx, obj.Name, obj.Namespace)
+}
+
+func (obj *MySQL) Delete(r client.Client, ctx context.Context) error {
+	return obj.Spec.Delete(r, ctx, obj.Name, obj.Namespace)
 }
 
 //+kubebuilder:object:root=true
