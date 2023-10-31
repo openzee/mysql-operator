@@ -36,10 +36,6 @@ spec:
         spec:
           description: MySQLSpec defines the desired state of MySQL
           properties:
-            foo:
-              description: Foo is an example field of MySQL. Edit mysql_types.go to
-                remove/update
-              type: string
             group:
               items:
                 properties:

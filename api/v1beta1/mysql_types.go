@@ -28,10 +28,19 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+
+func DeleteResource(r client.Client, ctx context.Context, key client.ObjectKey, obj client.Object) error {
+	if !IsExistResource(r, ctx, key, obj) {
+		return nil
+	}
+
+	return r.Delete(ctx, obj)
+}
 
 func IsExistResource(r client.Client, ctx context.Context, key client.ObjectKey, obj client.Object) bool {
 
@@ -72,11 +81,18 @@ type MySQLService struct {
 	Mysqld MySQLd        `json:"mysqld"`
 }
 
+func (obj *MySQLService) Delete(r client.Client, ctx context.Context, podName, namespace string) error {
+	found := &corev1.Pod{}
+	return DeleteResource(r, ctx, types.NamespacedName{Name: podName, Namespace: namespace}, found)
+}
+
 func (obj *MySQLService) Install(r client.Client, ctx context.Context, podName, namespace string) error {
 
+	log := log.FromContext(ctx)
 	found := &corev1.Pod{}
 
 	if IsExistResource(r, ctx, types.NamespacedName{Name: podName, Namespace: namespace}, found) {
+		log.Info("pod has exists", "podName", podName, "namespace", namespace)
 		return nil
 	}
 
@@ -184,7 +200,13 @@ func (obj *MySQLService) Install(r client.Client, ctx context.Context, podName, 
 		},
 	}
 
-	return r.Create(ctx, pod)
+	if err := r.Create(ctx, pod); err != nil {
+		log.Error(err, fmt.Sprintf("create pod [%s/%s] fails", podName, namespace))
+		return nil
+	}
+
+	log.Info(fmt.Sprintf("create pod [%s/%s] success", podName, namespace))
+	return nil
 }
 
 type MySQLMasterSlave struct {
@@ -206,29 +228,45 @@ type DeployCase struct {
 	MasterSlave *MySQLMasterSlave `json:"masterslave,omitempty"`
 }
 
-func (obj *DeployCase) Install(r client.Client, ctx context.Context, name, namespace string) error {
+func (obj *DeployCase) Install(r client.Client, ctx context.Context) error {
 
 	if err := obj.InstallService(r, ctx); err != nil {
 		return err
 	}
 
 	if obj.Single != nil {
-		return obj.Single.Install(r, ctx, fmt.Sprintf("mysql-single-%s", name), namespace)
+		return obj.Single.Install(r, ctx, fmt.Sprintf("mysql-single-%s", obj.Name), obj.Namespace)
 	}
 
 	return nil
 }
 
-func (obj *DeployCase) Update(r client.Client, ctx context.Context, name, namespace string) error {
+func (obj *DeployCase) Update(r client.Client, ctx context.Context) error {
 	return nil
 }
 
-func (obj *DeployCase) Delete(r client.Client, ctx context.Context, name, namespace string) error {
+func (obj *DeployCase) Delete(r client.Client, ctx context.Context) error {
+
+	if err := obj.DeleteService(r, ctx); err != nil {
+		return err
+	}
+
+	if obj.Single != nil {
+		return obj.Single.Delete(r, ctx, fmt.Sprintf("mysql-single-%s", obj.Name), obj.Namespace)
+	}
+
 	return nil
+}
+
+func (obj *DeployCase) getServiceName() string {
+	if obj.ServiceName == "" {
+		return fmt.Sprintf("svc-mysql-%s", obj.Name)
+	}
+
+	return obj.ServiceName
 }
 
 func (obj *DeployCase) serviceSelectorValue() string {
-
 	return fmt.Sprintf("master-node-%s", obj.Name)
 }
 
@@ -248,21 +286,22 @@ func (obj *DeployCase) UpdateService(r client.Client, ctx context.Context, svc_n
 	return r.Update(ctx, found)
 }
 
+func (obj *DeployCase) DeleteService(r client.Client, ctx context.Context) error {
+	found := &corev1.Service{}
+	return DeleteResource(r, ctx, types.NamespacedName{Name: obj.getServiceName(), Namespace: obj.Namespace}, found)
+}
+
 func (obj *DeployCase) InstallService(r client.Client, ctx context.Context) error {
 
 	found := &corev1.Service{}
 
-	if obj.ServiceName == "" {
-		obj.ServiceName = fmt.Sprintf("svc-mysql-%s", obj.Name)
-	}
-
-	if IsExistResource(r, ctx, types.NamespacedName{Name: obj.ServiceName, Namespace: obj.Namespace}, found) {
+	if IsExistResource(r, ctx, types.NamespacedName{Name: obj.getServiceName(), Namespace: obj.Namespace}, found) {
 		return nil
 	}
 
 	service := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      obj.ServiceName,
+			Name:      obj.getServiceName(),
 			Namespace: obj.Namespace,
 		},
 		Spec: corev1.ServiceSpec{
@@ -284,9 +323,6 @@ type MySQLSpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 
 	Group []DeployCase `json:"group"`
-
-	// Foo is an example field of MySQL. Edit mysql_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
 }
 
 func (obj *MySQLSpec) Install(r client.Client, ctx context.Context, name, namespace string) error {
@@ -296,7 +332,7 @@ func (obj *MySQLSpec) Install(r client.Client, ctx context.Context, name, namesp
 			item.Namespace = namespace
 		}
 
-		item.Install(r, ctx, name, namespace)
+		item.Install(r, ctx)
 	}
 
 	return nil
@@ -308,7 +344,7 @@ func (obj *MySQLSpec) Update(r client.Client, ctx context.Context, name, namespa
 			item.Namespace = namespace
 		}
 
-		item.Update(r, ctx, name, namespace)
+		item.Update(r, ctx)
 	}
 
 	return nil
@@ -320,13 +356,12 @@ func (obj *MySQLSpec) Delete(r client.Client, ctx context.Context, name, namespa
 			item.Namespace = namespace
 		}
 
-		item.Delete(r, ctx, name, namespace)
+		item.Delete(r, ctx)
 	}
 
 	return nil
 }
 
-// +kubebuilder:object:root=true
 // MySQLStatus defines the observed state of MySQL
 type MySQLStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
@@ -346,15 +381,36 @@ type MySQL struct {
 }
 
 func (obj *MySQL) Install(r client.Client, ctx context.Context) error {
-	return obj.Spec.Install(r, ctx, obj.Name, obj.Namespace)
+	log := log.FromContext(ctx)
+	if err := obj.Spec.Install(r, ctx, obj.Name, obj.Namespace); err != nil {
+		log.Error(err, fmt.Sprintf("CRD/MySQL [%s/%s] Install fails", obj.Name, obj.Namespace))
+		return err
+	}
+
+	log.Info(fmt.Sprintf("CRD/MySQL [%s/%s] Install success", obj.Name, obj.Namespace))
+	return nil
 }
 
 func (obj *MySQL) Update(r client.Client, ctx context.Context) error {
-	return obj.Spec.Update(r, ctx, obj.Name, obj.Namespace)
+	log := log.FromContext(ctx)
+	if err := obj.Spec.Update(r, ctx, obj.Name, obj.Namespace); err != nil {
+		log.Error(err, fmt.Sprintf("CRD/MySQL [%s/%s] Update fails", obj.Name, obj.Namespace))
+		return err
+	}
+
+	log.Info(fmt.Sprintf("CRD/MySQL [%s/%s] Update success", obj.Name, obj.Namespace))
+	return nil
 }
 
 func (obj *MySQL) Delete(r client.Client, ctx context.Context) error {
-	return obj.Spec.Delete(r, ctx, obj.Name, obj.Namespace)
+	log := log.FromContext(ctx)
+	if err := obj.Spec.Delete(r, ctx, obj.Name, obj.Namespace); err != nil {
+		log.Error(err, fmt.Sprintf("CRD/MySQL [%s/%s] Delete fails", obj.Name, obj.Namespace))
+		return err
+	}
+
+	log.Info(fmt.Sprintf("CRD/MySQL [%s/%s] Delete success", obj.Name, obj.Namespace))
+	return nil
 }
 
 //+kubebuilder:object:root=true
