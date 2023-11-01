@@ -249,12 +249,14 @@ type DeployCase struct {
 
 func (obj *DeployCase) Install(r client.Client, ctx context.Context) error {
 
-	if err := obj.InstallService(r, ctx); err != nil {
-		return err
-	}
-
 	if obj.Single != nil {
-		return obj.Single.Install(r, ctx, fmt.Sprintf("mysql-single-%s", obj.Name), obj.Namespace)
+		podName := fmt.Sprintf("mysql-single-%s", obj.Name)
+
+		if err := obj.installService(r, ctx, podName); err != nil {
+			return err
+		}
+
+		return obj.Single.Install(r, ctx, podName, obj.Namespace)
 	}
 
 	return nil
@@ -262,13 +264,14 @@ func (obj *DeployCase) Install(r client.Client, ctx context.Context) error {
 
 func (obj *DeployCase) Update(r client.Client, ctx context.Context) error {
 
-	//当引用的ServiceName更换时，直接创建新的SevideName，旧的ServiceName的名字找不到，直接放弃删除
-	if err := obj.InstallService(r, ctx); err != nil {
-		return err
-	}
-
 	if obj.Single != nil {
-		return obj.Single.Update(r, ctx, fmt.Sprintf("mysql-single-%s", obj.Name), obj.Namespace)
+		podName := fmt.Sprintf("mysql-single-%s", obj.Name)
+
+		if err := obj.updateService(r, ctx, podName); err != nil {
+			return err
+		}
+
+		return obj.Single.Update(r, ctx, podName, obj.Namespace)
 	}
 
 	return nil
@@ -276,12 +279,13 @@ func (obj *DeployCase) Update(r client.Client, ctx context.Context) error {
 
 func (obj *DeployCase) Delete(r client.Client, ctx context.Context) error {
 
-	if err := obj.DeleteService(r, ctx); err != nil {
+	if err := obj.deleteService(r, ctx); err != nil {
 		return err
 	}
 
 	if obj.Single != nil {
-		return obj.Single.Delete(r, ctx, fmt.Sprintf("mysql-single-%s", obj.Name), obj.Namespace)
+		podName := fmt.Sprintf("mysql-single-%s", obj.Name)
+		return obj.Single.Delete(r, ctx, podName, obj.Namespace)
 	}
 
 	return nil
@@ -295,16 +299,31 @@ func (obj *DeployCase) getServiceName() string {
 	return obj.ServiceName
 }
 
-func (obj *DeployCase) serviceSelectorValue() string {
-	return fmt.Sprintf("master-node-%s", obj.Name)
-}
-
-func (obj *DeployCase) DeleteService(r client.Client, ctx context.Context) error {
+func (obj *DeployCase) deleteService(r client.Client, ctx context.Context) error {
 	found := &corev1.Service{}
 	return DeleteResource(r, ctx, types.NamespacedName{Name: obj.getServiceName(), Namespace: obj.Namespace}, found)
 }
 
-func (obj *DeployCase) InstallService(r client.Client, ctx context.Context) error {
+func (obj *DeployCase) updateService(r client.Client, ctx context.Context, selectorAppLabel string) error {
+	found := &corev1.Service{}
+
+	if !IsExistResource(r, ctx, types.NamespacedName{Name: obj.getServiceName(), Namespace: obj.Namespace}, found) {
+		return obj.installService(r, ctx, selectorAppLabel)
+	}
+
+	if found.Spec.Selector == nil {
+		found.Spec.Selector = make(map[string]string)
+	}
+
+	if found.Spec.Selector["app"] != selectorAppLabel {
+		found.Spec.Selector["app"] = selectorAppLabel
+		return r.Update(ctx, found)
+	}
+
+	return nil
+}
+
+func (obj *DeployCase) installService(r client.Client, ctx context.Context, selectorAppLabel string) error {
 
 	found := &corev1.Service{}
 
@@ -323,7 +342,7 @@ func (obj *DeployCase) InstallService(r client.Client, ctx context.Context) erro
 				Port:       3306,
 				TargetPort: intstr.FromInt(3306),
 			}},
-			Selector: map[string]string{"app": obj.serviceSelectorValue()},
+			Selector: map[string]string{"app": selectorAppLabel},
 		},
 	}
 
@@ -339,37 +358,48 @@ type MySQLSpec struct {
 }
 
 func (obj *MySQLSpec) Install(r client.Client, ctx context.Context, name, namespace string) error {
+	log := log.FromContext(ctx)
 
 	for _, item := range obj.Group {
 		if item.Namespace == "" {
 			item.Namespace = namespace
 		}
 
-		item.Install(r, ctx)
+		if err := item.Install(r, ctx); err != nil {
+			log.Error(err, "install fails")
+		}
 	}
 
 	return nil
 }
 
 func (obj *MySQLSpec) Update(r client.Client, ctx context.Context, name, namespace string) error {
+	log := log.FromContext(ctx)
+
 	for _, item := range obj.Group {
 		if item.Namespace == "" {
 			item.Namespace = namespace
 		}
 
-		item.Update(r, ctx)
+		if err := item.Update(r, ctx); err != nil {
+			log.Error(err, "update fails")
+		}
 	}
 
 	return nil
 }
 
 func (obj *MySQLSpec) Delete(r client.Client, ctx context.Context, name, namespace string) error {
+	log := log.FromContext(ctx)
+
 	for _, item := range obj.Group {
 		if item.Namespace == "" {
 			item.Namespace = namespace
 		}
 
-		item.Delete(r, ctx)
+		if err := item.Delete(r, ctx); err != nil {
+			log.Error(err, "delete fails")
+		}
 	}
 
 	return nil
