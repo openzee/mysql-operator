@@ -11,7 +11,7 @@ require (
 	sigs.k8s.io/controller-runtime v0.16.2
 )
 
-replace sigs.k8s.io/controller-runtime v0.16.2 => ../controller-runtime
+//replace sigs.k8s.io/controller-runtime v0.16.2 => ../controller-runtime
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect

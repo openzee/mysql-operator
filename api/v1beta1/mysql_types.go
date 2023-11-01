@@ -60,6 +60,15 @@ type ResourceLimit struct {
 	Memory string `json:"memory,omitempty"`
 }
 
+func (obj *ResourceLimit) equ(other *ResourceLimit) bool {
+
+	if obj == nil || other == nil {
+		return false
+	}
+
+	return obj.Cpu == other.Cpu && obj.Memory == other.Memory
+}
+
 type MySQLHostNode struct {
 	//MySQL调度到该节点
 	NodeName string         `json:"nodename"`
@@ -79,6 +88,16 @@ type MySQLd struct {
 type MySQLService struct {
 	Host   MySQLHostNode `json:"host"`
 	Mysqld MySQLd        `json:"mysqld"`
+}
+
+func (obj *MySQLService) Update(r client.Client, ctx context.Context, podName, namespace string) error {
+
+	found := &corev1.Pod{}
+	if !IsExistResource(r, ctx, types.NamespacedName{Name: podName, Namespace: namespace}, found) {
+		return obj.Install(r, ctx, podName, namespace)
+	}
+
+	return nil
 }
 
 func (obj *MySQLService) Delete(r client.Client, ctx context.Context, podName, namespace string) error {
@@ -242,6 +261,16 @@ func (obj *DeployCase) Install(r client.Client, ctx context.Context) error {
 }
 
 func (obj *DeployCase) Update(r client.Client, ctx context.Context) error {
+
+	//当引用的ServiceName更换时，直接创建新的SevideName，旧的ServiceName的名字找不到，直接放弃删除
+	if err := obj.InstallService(r, ctx); err != nil {
+		return err
+	}
+
+	if obj.Single != nil {
+		return obj.Single.Update(r, ctx, fmt.Sprintf("mysql-single-%s", obj.Name), obj.Namespace)
+	}
+
 	return nil
 }
 
@@ -268,22 +297,6 @@ func (obj *DeployCase) getServiceName() string {
 
 func (obj *DeployCase) serviceSelectorValue() string {
 	return fmt.Sprintf("master-node-%s", obj.Name)
-}
-
-func (obj *DeployCase) UpdateService(r client.Client, ctx context.Context, svc_name, svc_ns, selectorAppValue string) error {
-	found := &corev1.Service{}
-
-	if err := r.Get(ctx, types.NamespacedName{Name: svc_name, Namespace: svc_ns}, found); err != nil {
-		return err
-	}
-
-	if found.Spec.Selector["app"] == selectorAppValue {
-		return nil
-	}
-
-	found.Spec.Selector["app"] = selectorAppValue
-
-	return r.Update(ctx, found)
 }
 
 func (obj *DeployCase) DeleteService(r client.Client, ctx context.Context) error {
