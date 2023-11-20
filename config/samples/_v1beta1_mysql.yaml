@@ -41,6 +41,9 @@ metadata:
     app.kubernetes.io/created-by: mysql-operator
   name: mysql-sample
 spec:
+  global:
+    xtrabackup:
+      image: harbor.aibee.cn/platform/xtrabackup:2.4.26-beta.2
   group:
   - name: "test123"
     namespace: infra
@@ -50,15 +53,15 @@ spec:
         rootpassword: root_password
         mycnf_cm: cm-mysql-single-123
         init_sql_cm: cm-mysql-init-sql-123
-      host:
-        nodename: bj-cpu065
-        dir: /mnt/124
         request:
           cpu: 1000m
           memory: 2Gi
         limit:
           cpu: 4000m
           memory: 8Gi
+      host:
+        nodename: bj-cpu065
+        dir: /mnt/124
   - name: "test456"
     namespace: infra
     service_name: "svc-kk"

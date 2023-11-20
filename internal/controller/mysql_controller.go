@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -29,7 +28,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	atlasaibeecnv1beta1 "github.com/openzee/mysql-operator/api/v1beta1"
 )
@@ -37,8 +38,7 @@ import (
 // MySQLReconciler reconciles a MySQL object
 type MySQLReconciler struct {
 	client.Client
-	MyScheme        *runtime.Scheme
-	resourceVersion string
+	MyScheme *runtime.Scheme
 }
 
 //+kubebuilder:rbac:groups=atlas.aibee.cn,resources=mysqls,verbs=get;list;watch;create;update;patch;delete
@@ -92,13 +92,16 @@ type MySQLReconciler struct {
 
 //自定义对象MySQL新建时，
 
+//目前暂时提供安装、删除，暂时不支持更新事件
+//TODO: 该函数是否会在不同的事件驱动下，并发执行
+//TODO: 对于更新事件，是拿不到旧的MySQL信息的
+
 func (r *MySQLReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 
 	_ = log.FromContext(ctx)
-	instance := &atlasaibeecnv1beta1.MySQL{}
-	// name of our custom finalizer
-	myFinalizerName := "mysql.atlas.aibee.cn/finalizer"
 
+	//获取当前集群最新的MySQL实例
+	instance := &atlasaibeecnv1beta1.MySQL{}
 	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -106,14 +109,21 @@ func (r *MySQLReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err //该事件会重新入队，并再次延迟触发
 	}
 
-	defer func() {
-		r.resourceVersion = instance.ResourceVersion
-	}()
+	if instance.Status.GroupStatus == nil {
+		instance.Status.GroupStatus = make(map[string]int)
+	}
 
-	//监测到MySQL对象被删除
-	if !instance.ObjectMeta.DeletionTimestamp.IsZero() {
+	//defer func() {
+	//	r.resourceVersion = instance.ResourceVersion
+	//}()
+
+	// name of our custom finalizer
+	myFinalizerName := "mysql.atlas.aibee.cn/finalizer"
+
+	//监测到MySQL对象申请删除
+	if instance.ObjectMeta.DeletionTimestamp.IsZero() == false {
+
 		// The object is being deleted
-
 		if err := instance.Delete(r, ctx); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -122,33 +132,54 @@ func (r *MySQLReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			return ctrl.Result{}, nil
 		}
 
+		//相关资源删除完毕，移除Finalizer，使MySQL对象被k8s回收
 		controllerutil.RemoveFinalizer(instance, myFinalizerName)
+
 		return ctrl.Result{}, r.Update(ctx, instance)
 	}
 
 	//先添加finalizer
 	if !controllerutil.ContainsFinalizer(instance, myFinalizerName) {
 		controllerutil.AddFinalizer(instance, myFinalizerName)
-		fmt.Println("add finalizer and update")
-		return ctrl.Result{}, r.Update(ctx, instance)
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, r.Update(ctx, instance)
 	}
 
-	//处理更新事件
-	//但是在operator没有running期间，crd/MySQL对象的变更应该抓取不到
-	if r.resourceVersion != "" && r.resourceVersion != instance.ResourceVersion {
-		instance.Update(r, ctx)
-		return ctrl.Result{}, nil
-	}
+	//暂时不支持更新事件
+	//if r.resourceVersion != "" && r.resourceVersion != instance.ResourceVersion {
+	//	instance.Update(r, ctx)
+	//	return ctrl.Result{}, nil
+	//}
 
 	//初始化安装或是定时检查服务状态是否存在
-	instance.Install(r, ctx)
+	if err := instance.Install(r, ctx); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
+//下面的过滤函数与Reconcile是异步执行的，过滤后的事件放入一个队列，然后再由队列处理函数读取出来处理
+//二者之间仅有ObjectName和ObjectNamespace,所以不可以将过滤函数和Reconcile的执行进行关联
+
+/*
+ResourceVersion 基于底层etcd的revision机制，资源对象每次update时都会改变，且集群范围内唯一。
+Generation初始值为1，随Spec内容的改变而自增。
+*/
 // SetupWithManager sets up the controller with the Manager.
 func (r *MySQLReconciler) SetupWithManager(mgr ctrl.Manager) error {
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&atlasaibeecnv1beta1.MySQL{}).
+		WithEventFilter(predicate.Funcs{
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration()
+			},
+			DeleteFunc: func(e event.DeleteEvent) bool {
+				return true
+			},
+			CreateFunc: func(e event.CreateEvent) bool {
+				return true
+			},
+		}).
 		Complete(r)
 }

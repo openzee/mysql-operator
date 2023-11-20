@@ -71,30 +71,30 @@ func (obj *ResourceLimit) equ(other *ResourceLimit) bool {
 
 type MySQLHostNode struct {
 	//MySQL调度到该节点
-	NodeName string         `json:"nodename"`
-	Dir      string         `json:"dir"`
-	Request  *ResourceLimit `json:"request,omitempty"`
-	Limit    *ResourceLimit `json:"limit,omitempty"`
+	NodeName string `json:"nodename"`
+	Dir      string `json:"dir"`
 }
 
 // 表示一个msyqld服务的配置
 type MySQLd struct {
-	Image                string `json:"image"`
-	RootPassword         string `json:"rootpassword,omitempty"`
-	MycnfConfigMapName   string `json:"mycnf_cm,omitempty"`
-	InitSQLConfigMapName string `json:"init_sql_cm,omitempty"`
+	Image                string         `json:"image"`
+	RootPassword         string         `json:"rootpassword"`
+	MycnfConfigMapName   string         `json:"mycnf_cm,omitempty"`
+	InitSQLConfigMapName string         `json:"init_sql_cm,omitempty"`
+	Request              *ResourceLimit `json:"request,omitempty"`
+	Limit                *ResourceLimit `json:"limit,omitempty"`
 }
 
 type MySQLService struct {
-	Host   MySQLHostNode `json:"host"`
 	Mysqld MySQLd        `json:"mysqld"`
+	Host   MySQLHostNode `json:"host"`
 }
 
-func (obj *MySQLService) Update(r client.Client, ctx context.Context, podName, namespace string) error {
+func (obj *MySQLService) Update(r client.Client, ctx context.Context, podName, namespace string, spec *MySQLSpec) error {
 
 	found := &corev1.Pod{}
 	if !IsExistResource(r, ctx, types.NamespacedName{Name: podName, Namespace: namespace}, found) {
-		return obj.Install(r, ctx, podName, namespace)
+		return obj.Install(r, ctx, podName, namespace, spec)
 	}
 
 	return nil
@@ -105,7 +105,7 @@ func (obj *MySQLService) Delete(r client.Client, ctx context.Context, podName, n
 	return DeleteResource(r, ctx, types.NamespacedName{Name: podName, Namespace: namespace}, found)
 }
 
-func (obj *MySQLService) Install(r client.Client, ctx context.Context, podName, namespace string) error {
+func (obj *MySQLService) Install(r client.Client, ctx context.Context, podName, namespace string, spec *MySQLSpec) error {
 
 	log := log.FromContext(ctx)
 	found := &corev1.Pod{}
@@ -124,17 +124,17 @@ func (obj *MySQLService) Install(r client.Client, ctx context.Context, podName, 
 	}
 
 	resourceRequest := defaultResource
-	if obj.Host.Request != nil {
+	if obj.Mysqld.Request != nil {
 		resourceRequest = corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse(obj.Host.Request.Cpu),
-			corev1.ResourceMemory: resource.MustParse(obj.Host.Request.Memory)}
+			corev1.ResourceCPU:    resource.MustParse(obj.Mysqld.Request.Cpu),
+			corev1.ResourceMemory: resource.MustParse(obj.Mysqld.Request.Memory)}
 	}
 
 	resourceLimit := defaultResource
-	if obj.Host.Limit != nil {
+	if obj.Mysqld.Limit != nil {
 		resourceLimit = corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse(obj.Host.Limit.Cpu),
-			corev1.ResourceMemory: resource.MustParse(obj.Host.Limit.Memory)}
+			corev1.ResourceCPU:    resource.MustParse(obj.Mysqld.Limit.Cpu),
+			corev1.ResourceMemory: resource.MustParse(obj.Mysqld.Limit.Memory)}
 	}
 
 	volumes := []corev1.Volume{
@@ -143,7 +143,8 @@ func (obj *MySQLService) Install(r client.Client, ctx context.Context, podName, 
 			VolumeSource: corev1.VolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
 					Path: obj.Host.Dir,
-					Type: &pathDir},
+					Type: &pathDir,
+				},
 			}},
 	}
 
@@ -189,6 +190,60 @@ func (obj *MySQLService) Install(r client.Client, ctx context.Context, podName, 
 		})
 	}
 
+	containerArray := []corev1.Container{
+		corev1.Container{
+			Name: "mysql",
+			Resources: corev1.ResourceRequirements{
+				Limits:   resourceLimit,
+				Requests: resourceRequest,
+			},
+			Image: obj.Mysqld.Image,
+			Ports: []corev1.ContainerPort{
+				corev1.ContainerPort{
+					Name:          "mysql",
+					ContainerPort: 3306,
+				}},
+			VolumeMounts: volumeMounts,
+			Env: []corev1.EnvVar{corev1.EnvVar{
+				Name:  "MYSQL_ROOT_PASSWORD",
+				Value: obj.Mysqld.RootPassword,
+			}},
+		},
+	}
+
+	if spec.GlobObj != nil && spec.GlobObj.Xtra != nil {
+
+		// /usr/local/bin/my_xtrabackup --no-defaults --no-lock --binlog-log=off --parallel=16 --user=root --password=iU8yFSvDP6FeuMJl --host=${HOSTNAME} --backup --backup-listen --listen-port=9000 --stream=xbstream --datadir=/source_mysql_data --target-dir=/tmp/a
+
+		containerArray = append(containerArray, corev1.Container{
+			Name: "xtrabackup",
+			Command: []string{"/usr/local/bin/my_xtrabackup",
+				"--no-defaults",
+				"--no-lock",
+				"--user=root",
+				"--password=" + obj.Mysqld.RootPassword,
+				"--binlog-log=off",
+				"--parallel=16",
+				"--socket=/var/lib/mysql/mysqld.sock",
+				"--backup",
+				"--backup-listen",
+				"--listen-port=9000",
+				"--stream=xbstream",
+				"--datadir=/var/lib/mysql",
+				"--target-dir=/tmp/",
+			},
+			Image: spec.GlobObj.Xtra.Image,
+			VolumeMounts: []corev1.VolumeMount{
+				corev1.VolumeMount{
+					Name:      "data",
+					MountPath: "/var/lib/mysql",
+					SubPath:   "mysql",
+					ReadOnly:  true,
+				},
+			},
+		})
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
@@ -196,26 +251,9 @@ func (obj *MySQLService) Install(r client.Client, ctx context.Context, podName, 
 			Labels:    map[string]string{"app": podName},
 		},
 		Spec: corev1.PodSpec{
-			Volumes:  volumes,
-			NodeName: obj.Host.NodeName,
-			Containers: []corev1.Container{corev1.Container{
-				Name: "mysql",
-				Resources: corev1.ResourceRequirements{
-					Limits:   resourceLimit,
-					Requests: resourceRequest,
-				},
-				Image: obj.Mysqld.Image,
-				Ports: []corev1.ContainerPort{
-					corev1.ContainerPort{
-						Name:          "mysql",
-						ContainerPort: 3306,
-					}},
-				VolumeMounts: volumeMounts,
-				Env: []corev1.EnvVar{corev1.EnvVar{
-					Name:  "MYSQL_ROOT_PASSWORD",
-					Value: obj.Mysqld.RootPassword,
-				}},
-			}},
+			Volumes:    volumes,
+			NodeName:   obj.Host.NodeName,
+			Containers: containerArray,
 		},
 	}
 
@@ -247,31 +285,34 @@ type DeployCase struct {
 	MasterSlave *MySQLMasterSlave `json:"masterslave,omitempty"`
 }
 
-func (obj *DeployCase) Install(r client.Client, ctx context.Context) error {
+func (obj *DeployCase) Install(r client.Client, ctx context.Context, spec *MySQLSpec) error {
 
 	if obj.Single != nil {
 		podName := fmt.Sprintf("mysql-single-%s", obj.Name)
 
-		if err := obj.installService(r, ctx, podName); err != nil {
+		if err := obj.installService(r, ctx, podName, spec); err != nil {
 			return err
 		}
 
-		return obj.Single.Install(r, ctx, podName, obj.Namespace)
+		if err := obj.Single.Install(r, ctx, podName, obj.Namespace, spec); err != nil {
+			obj.deleteService(r, ctx)
+			return err
+		}
 	}
 
 	return nil
 }
 
-func (obj *DeployCase) Update(r client.Client, ctx context.Context) error {
+func (obj *DeployCase) Update(r client.Client, ctx context.Context, spec *MySQLSpec) error {
 
 	if obj.Single != nil {
 		podName := fmt.Sprintf("mysql-single-%s", obj.Name)
 
-		if err := obj.updateService(r, ctx, podName); err != nil {
+		if err := obj.updateService(r, ctx, podName, spec); err != nil {
 			return err
 		}
 
-		return obj.Single.Update(r, ctx, podName, obj.Namespace)
+		return obj.Single.Update(r, ctx, podName, obj.Namespace, spec)
 	}
 
 	return nil
@@ -304,11 +345,11 @@ func (obj *DeployCase) deleteService(r client.Client, ctx context.Context) error
 	return DeleteResource(r, ctx, types.NamespacedName{Name: obj.getServiceName(), Namespace: obj.Namespace}, found)
 }
 
-func (obj *DeployCase) updateService(r client.Client, ctx context.Context, selectorAppLabel string) error {
+func (obj *DeployCase) updateService(r client.Client, ctx context.Context, selectorAppLabel string, spec *MySQLSpec) error {
 	found := &corev1.Service{}
 
 	if !IsExistResource(r, ctx, types.NamespacedName{Name: obj.getServiceName(), Namespace: obj.Namespace}, found) {
-		return obj.installService(r, ctx, selectorAppLabel)
+		return obj.installService(r, ctx, selectorAppLabel, spec)
 	}
 
 	if found.Spec.Selector == nil {
@@ -323,12 +364,26 @@ func (obj *DeployCase) updateService(r client.Client, ctx context.Context, selec
 	return nil
 }
 
-func (obj *DeployCase) installService(r client.Client, ctx context.Context, selectorAppLabel string) error {
+func (obj *DeployCase) installService(r client.Client, ctx context.Context, selectorAppLabel string, spec *MySQLSpec) error {
 
 	found := &corev1.Service{}
 
 	if IsExistResource(r, ctx, types.NamespacedName{Name: obj.getServiceName(), Namespace: obj.Namespace}, found) {
 		return nil
+	}
+
+	portArray := []corev1.ServicePort{corev1.ServicePort{
+		Name:       "mysql",
+		Port:       3306,
+		TargetPort: intstr.FromInt(3306),
+	}}
+
+	if spec.GlobObj != nil && spec.GlobObj.Xtra != nil {
+		portArray = append(portArray, corev1.ServicePort{
+			Name:       "xtrabackup",
+			Port:       9000,
+			TargetPort: intstr.FromInt(9000),
+		})
 	}
 
 	service := &corev1.Service{
@@ -337,11 +392,7 @@ func (obj *DeployCase) installService(r client.Client, ctx context.Context, sele
 			Namespace: obj.Namespace,
 		},
 		Spec: corev1.ServiceSpec{
-			Ports: []corev1.ServicePort{corev1.ServicePort{
-				Name:       "mysql",
-				Port:       3306,
-				TargetPort: intstr.FromInt(3306),
-			}},
+			Ports:    portArray,
 			Selector: map[string]string{"app": selectorAppLabel},
 		},
 	}
@@ -349,39 +400,52 @@ func (obj *DeployCase) installService(r client.Client, ctx context.Context, sele
 	return r.Create(ctx, service)
 }
 
+type Xtrabackup struct {
+	Image string `json:"image"`
+}
+
+type Global struct {
+	Xtra *Xtrabackup `json:"xtrabackup,omitempty"`
+}
+
 // MySQLSpec defines the desired state of MySQL
 type MySQLSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	Group []DeployCase `json:"group"`
+	GlobObj *Global      `json:"global,omitempty"`
+	Group   []DeployCase `json:"group"`
 }
 
-func (obj *MySQLSpec) Install(r client.Client, ctx context.Context, name, namespace string) error {
-	log := log.FromContext(ctx)
+func (obj *MySQLSpec) Install(r client.Client, ctx context.Context, name, namespace string, callback func(name string)) error {
+	//log := log.FromContext(ctx)
 
 	for _, item := range obj.Group {
 		if item.Namespace == "" {
 			item.Namespace = namespace
 		}
 
-		if err := item.Install(r, ctx); err != nil {
-			log.Error(err, "install fails")
+		if err := item.Install(r, ctx, obj); err != nil {
+			return err
 		}
+
+		callback(item.Name)
 	}
 
 	return nil
 }
 
-func (obj *MySQLSpec) Update(r client.Client, ctx context.Context, name, namespace string) error {
+func (obj *MySQLSpec) Update(r client.Client, ctx context.Context, name, namespace string, prevGroup map[string]int, spec *MySQLSpec) error {
 	log := log.FromContext(ctx)
 
 	for _, item := range obj.Group {
+		delete(prevGroup, item.Name)
+
 		if item.Namespace == "" {
 			item.Namespace = namespace
 		}
 
-		if err := item.Update(r, ctx); err != nil {
+		if err := item.Update(r, ctx, spec); err != nil {
 			log.Error(err, "update fails")
 		}
 	}
@@ -409,6 +473,7 @@ func (obj *MySQLSpec) Delete(r client.Client, ctx context.Context, name, namespa
 type MySQLStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
+	GroupStatus map[string]int `json:"group"`
 }
 
 //+kubebuilder:object:root=true
@@ -425,18 +490,22 @@ type MySQL struct {
 
 func (obj *MySQL) Install(r client.Client, ctx context.Context) error {
 	log := log.FromContext(ctx)
-	if err := obj.Spec.Install(r, ctx, obj.Name, obj.Namespace); err != nil {
+
+	if err := obj.Spec.Install(r, ctx, obj.Name, obj.Namespace, func(gName string) {
+		obj.Status.GroupStatus[gName] = 1
+	}); err != nil {
 		log.Error(err, fmt.Sprintf("CRD/MySQL [%s/%s] Install fails", obj.Name, obj.Namespace))
 		return err
 	}
 
+	r.Status().Update(ctx, obj)
 	log.Info(fmt.Sprintf("CRD/MySQL [%s/%s] Install success", obj.Name, obj.Namespace))
 	return nil
 }
 
 func (obj *MySQL) Update(r client.Client, ctx context.Context) error {
 	log := log.FromContext(ctx)
-	if err := obj.Spec.Update(r, ctx, obj.Name, obj.Namespace); err != nil {
+	if err := obj.Spec.Update(r, ctx, obj.Name, obj.Namespace, obj.Status.GroupStatus, &obj.Spec); err != nil {
 		log.Error(err, fmt.Sprintf("CRD/MySQL [%s/%s] Update fails", obj.Name, obj.Namespace))
 		return err
 	}
