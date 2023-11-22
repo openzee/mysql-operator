@@ -38,6 +38,8 @@ spec:
           properties:
             global:
               properties:
+                imagePullSecrets:
+                  type: string
                 xtrabackup:
                   properties:
                     image:
@@ -63,16 +65,21 @@ spec:
                     properties:
                       master:
                         properties:
-                          host:
+                          datadir:
                             properties:
-                              dir:
+                              host:
+                                properties:
+                                  dir:
+                                    type: string
+                                  nodename:
+                                    description: MySQL调度到该节点
+                                    type: string
+                                required:
+                                - dir
+                                - nodename
+                                type: object
+                              pvc:
                                 type: string
-                              nodename:
-                                description: MySQL调度到该节点
-                                type: string
-                            required:
-                            - dir
-                            - nodename
                             type: object
                           mysqld:
                             description: 表示一个msyqld服务的配置
@@ -104,21 +111,26 @@ spec:
                             - rootpassword
                             type: object
                         required:
-                        - host
+                        - datadir
                         - mysqld
                         type: object
                       slave:
                         properties:
-                          host:
+                          datadir:
                             properties:
-                              dir:
+                              host:
+                                properties:
+                                  dir:
+                                    type: string
+                                  nodename:
+                                    description: MySQL调度到该节点
+                                    type: string
+                                required:
+                                - dir
+                                - nodename
+                                type: object
+                              pvc:
                                 type: string
-                              nodename:
-                                description: MySQL调度到该节点
-                                type: string
-                            required:
-                            - dir
-                            - nodename
                             type: object
                           mysqld:
                             description: 表示一个msyqld服务的配置
@@ -150,7 +162,7 @@ spec:
                             - rootpassword
                             type: object
                         required:
-                        - host
+                        - datadir
                         - mysqld
                         type: object
                     required:
@@ -165,16 +177,21 @@ spec:
                     type: string
                   single:
                     properties:
-                      host:
+                      datadir:
                         properties:
-                          dir:
+                          host:
+                            properties:
+                              dir:
+                                type: string
+                              nodename:
+                                description: MySQL调度到该节点
+                                type: string
+                            required:
+                            - dir
+                            - nodename
+                            type: object
+                          pvc:
                             type: string
-                          nodename:
-                            description: MySQL调度到该节点
-                            type: string
-                        required:
-                        - dir
-                        - nodename
                         type: object
                       mysqld:
                         description: 表示一个msyqld服务的配置
@@ -206,7 +223,7 @@ spec:
                         - rootpassword
                         type: object
                     required:
-                    - host
+                    - datadir
                     - mysqld
                     type: object
                 required:

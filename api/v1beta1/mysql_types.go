@@ -85,9 +85,14 @@ type MySQLd struct {
 	Limit                *ResourceLimit `json:"limit,omitempty"`
 }
 
+type DataDir struct {
+	Host *MySQLHostNode `json:"host,omitempty"`
+	Pvc  string         `json:"pvc,omitempty"`
+}
+
 type MySQLService struct {
-	Mysqld MySQLd        `json:"mysqld"`
-	Host   MySQLHostNode `json:"host"`
+	Mysqld  MySQLd  `json:"mysqld"`
+	Datadir DataDir `json:"datadir"`
 }
 
 func (obj *MySQLService) Update(r client.Client, ctx context.Context, podName, namespace string, spec *MySQLSpec) error {
@@ -137,15 +142,28 @@ func (obj *MySQLService) Install(r client.Client, ctx context.Context, podName, 
 			corev1.ResourceMemory: resource.MustParse(obj.Mysqld.Limit.Memory)}
 	}
 
-	volumes := []corev1.Volume{
-		corev1.Volume{
-			Name: "data",
-			VolumeSource: corev1.VolumeSource{
-				HostPath: &corev1.HostPathVolumeSource{
-					Path: obj.Host.Dir,
-					Type: &pathDir,
-				},
-			}},
+	volumes := []corev1.Volume{}
+
+	if obj.Datadir.Host != nil {
+		volumes = append(volumes,
+			corev1.Volume{
+				Name: "data",
+				VolumeSource: corev1.VolumeSource{
+					HostPath: &corev1.HostPathVolumeSource{
+						Path: obj.Datadir.Host.Dir,
+						Type: &pathDir,
+					},
+				}})
+	} else if obj.Datadir.Pvc != "" {
+		volumes = append(volumes,
+			corev1.Volume{
+				Name: "data",
+				VolumeSource: corev1.VolumeSource{
+					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+						ClaimName: obj.Datadir.Pvc,
+						ReadOnly:  false,
+					},
+				}})
 	}
 
 	volumeMounts := []corev1.VolumeMount{
@@ -197,6 +215,7 @@ func (obj *MySQLService) Install(r client.Client, ctx context.Context, podName, 
 				Limits:   resourceLimit,
 				Requests: resourceRequest,
 			},
+			Args:  []string{"--socket=/var/lib/mysql/mysqld.sock"},
 			Image: obj.Mysqld.Image,
 			Ports: []corev1.ContainerPort{
 				corev1.ContainerPort{
@@ -244,6 +263,11 @@ func (obj *MySQLService) Install(r client.Client, ctx context.Context, podName, 
 		})
 	}
 
+	ImagePullSecretsArray := []corev1.LocalObjectReference{}
+	if spec.GlobObj != nil && spec.GlobObj.ImagePullSecrets != "" {
+		ImagePullSecretsArray = append(ImagePullSecretsArray, corev1.LocalObjectReference{Name: spec.GlobObj.ImagePullSecrets})
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
@@ -251,10 +275,14 @@ func (obj *MySQLService) Install(r client.Client, ctx context.Context, podName, 
 			Labels:    map[string]string{"app": podName},
 		},
 		Spec: corev1.PodSpec{
-			Volumes:    volumes,
-			NodeName:   obj.Host.NodeName,
-			Containers: containerArray,
+			Volumes:          volumes,
+			Containers:       containerArray,
+			ImagePullSecrets: ImagePullSecretsArray,
 		},
+	}
+
+	if obj.Datadir.Host != nil {
+		pod.Spec.NodeName = obj.Datadir.Host.NodeName
 	}
 
 	if err := r.Create(ctx, pod); err != nil {
@@ -405,7 +433,8 @@ type Xtrabackup struct {
 }
 
 type Global struct {
-	Xtra *Xtrabackup `json:"xtrabackup,omitempty"`
+	ImagePullSecrets string      `json:"imagePullSecrets,omitempty"`
+	Xtra             *Xtrabackup `json:"xtrabackup,omitempty"`
 }
 
 // MySQLSpec defines the desired state of MySQL
