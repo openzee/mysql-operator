@@ -104,7 +104,10 @@ spec:
           memory: 8Gi
       datadir:
         host:
-          nodename: bj-cpu065
+          nodeSelector:
+            key: "mysql"
+            value: "true"
+          #nodename: bj-cpu065
           dir: /mnt/124
   - name: "test456"
     namespace: infra
@@ -115,5 +118,8 @@ spec:
         rootpassword: root_password
       datadir:
         host:
-          nodename: bj-cpu067
-          dir: /mnt/124
+          nodeSelector:
+            key: "mysql"
+            value: "true"
+          #nodename: bj-cpu067
+          dir: /mnt/12444

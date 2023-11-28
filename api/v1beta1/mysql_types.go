@@ -69,10 +69,16 @@ func (obj *ResourceLimit) equ(other *ResourceLimit) bool {
 	return obj.Cpu == other.Cpu && obj.Memory == other.Memory
 }
 
+type Label struct {
+	Key string `json:"key"`
+	Val string `json:"value"`
+}
+
 type MySQLHostNode struct {
 	//MySQL调度到该节点
-	NodeName string `json:"nodename"`
-	Dir      string `json:"dir"`
+	NodeName     string `json:"nodename,omitempty"`
+	Dir          string `json:"dir"`
+	NodeSelector *Label `json:"nodeSelector,omitempty"`
 }
 
 // 表示一个msyqld服务的配置
@@ -272,17 +278,51 @@ func (obj *MySQLService) Install(r client.Client, ctx context.Context, podName, 
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
 			Namespace: namespace,
-			Labels:    map[string]string{"app": podName},
+			Labels:    map[string]string{"app": podName, "mysql": "true"},
 		},
 		Spec: corev1.PodSpec{
 			Volumes:          volumes,
 			Containers:       containerArray,
 			ImagePullSecrets: ImagePullSecretsArray,
+			Affinity: &corev1.Affinity{
+				PodAntiAffinity: &corev1.PodAntiAffinity{ //POD反亲和，尽量避免将mysql调度到同一个机器节点上
+					PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{
+						corev1.WeightedPodAffinityTerm{
+							Weight: 1,
+							PodAffinityTerm: corev1.PodAffinityTerm{
+								LabelSelector: &metav1.LabelSelector{ //这个标签针对的不是Node，而是POD
+									MatchLabels: map[string]string{
+										"mysql": "true",
+									}},
+								TopologyKey: "kubernetes.io/hostname",
+							},
+						},
+					},
+				},
+			},
 		},
 	}
 
 	if obj.Datadir.Host != nil {
-		pod.Spec.NodeName = obj.Datadir.Host.NodeName
+		if obj.Datadir.Host.NodeName != "" {
+			pod.Spec.NodeName = obj.Datadir.Host.NodeName
+		} else if obj.Datadir.Host.NodeSelector != nil {
+			pod.Spec.Affinity.NodeAffinity = &corev1.NodeAffinity{ //Node亲和
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{
+						corev1.NodeSelectorTerm{
+							MatchExpressions: []corev1.NodeSelectorRequirement{
+								corev1.NodeSelectorRequirement{
+									Key:      obj.Datadir.Host.NodeSelector.Key,
+									Operator: corev1.NodeSelectorOpIn,
+									Values:   []string{obj.Datadir.Host.NodeSelector.Val},
+								},
+							},
+						},
+					},
+				},
+			}
+		}
 	}
 
 	if err := r.Create(ctx, pod); err != nil {

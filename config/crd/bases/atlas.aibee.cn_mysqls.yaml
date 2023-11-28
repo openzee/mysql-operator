@@ -71,12 +71,21 @@ spec:
                                 properties:
                                   dir:
                                     type: string
+                                  nodeSelector:
+                                    properties:
+                                      key:
+                                        type: string
+                                      value:
+                                        type: string
+                                    required:
+                                    - key
+                                    - value
+                                    type: object
                                   nodename:
                                     description: MySQL调度到该节点
                                     type: string
                                 required:
                                 - dir
-                                - nodename
                                 type: object
                               pvc:
                                 type: string
@@ -122,12 +131,21 @@ spec:
                                 properties:
                                   dir:
                                     type: string
+                                  nodeSelector:
+                                    properties:
+                                      key:
+                                        type: string
+                                      value:
+                                        type: string
+                                    required:
+                                    - key
+                                    - value
+                                    type: object
                                   nodename:
                                     description: MySQL调度到该节点
                                     type: string
                                 required:
                                 - dir
-                                - nodename
                                 type: object
                               pvc:
                                 type: string
@@ -183,12 +201,21 @@ spec:
                             properties:
                               dir:
                                 type: string
+                              nodeSelector:
+                                properties:
+                                  key:
+                                    type: string
+                                  value:
+                                    type: string
+                                required:
+                                - key
+                                - value
+                                type: object
                               nodename:
                                 description: MySQL调度到该节点
                                 type: string
                             required:
                             - dir
-                            - nodename
                             type: object
                           pvc:
                             type: string
